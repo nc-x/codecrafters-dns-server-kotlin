@@ -91,5 +91,10 @@
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-network-jvm</artifactId>
+            <version>3.0.0</version>
+        </dependency>
     </dependencies>
 </project>

@@ -1,19 +1,21 @@
-fun main(args: Array<String>) {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    System.err.println("Logs from your program will appear here!")
+import io.ktor.network.selector.*
+import io.ktor.network.sockets.*
+import io.ktor.utils.io.core.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlin.io.use
+import kotlin.text.toByteArray
 
-    // Uncomment this block to pass the first stage
-    //
-    // val udpSocket = java.net.DatagramSocket(2053)
-    //
-    // while (true) {
-    //   val buffer = ByteArray(512)
-    //   val packet = java.net.DatagramPacket(buffer, buffer.size)
-    //   udpSocket.receive(packet)
-    //   println("Received data")
-    //
-    //   val responseData = "hello world".toByteArray() // Dummy response, replace when implementing later stages
-    //   val responsePacket = java.net.DatagramPacket(responseData, responseData.size, packet.address, packet.port)
-    //   udpSocket.send(responsePacket)
-    // }
+fun main(args: Array<String>) = runBlocking {
+    val selectorManager = SelectorManager(Dispatchers.IO)
+    aSocket(selectorManager).udp().bind(InetSocketAddress("127.0.0.1", 2053)).use { socket ->
+        while (true) {
+            val datagram = socket.receive()
+            println("Received data")
+            val packet = buildPacket {
+                write("hello world".toByteArray())
+            }
+            socket.send(Datagram(packet, datagram.address))
+        }
+    }
 }
