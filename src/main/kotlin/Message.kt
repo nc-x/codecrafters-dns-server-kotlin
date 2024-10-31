@@ -1,3 +1,4 @@
+import Message.Offset
 import io.ktor.utils.io.core.*
 import kotlinx.io.Buffer
 import kotlinx.io.Source
@@ -124,17 +125,16 @@ data class Question(
     val clazz: Class,
 ) {
     @OptIn(ExperimentalStdlibApi::class)
-    fun toByteArray(buffer: Buffer) {
-        buffer.writeDomainName(domainName)
+    fun toByteArray(buffer: Buffer, offset: Offset, mappings: MutableMap<String, Int>) {
+        buffer.writeDomainName(domainName, offset, mappings)
         buffer.writeShort(type.value)
         buffer.writeShort(clazz.value)
     }
 
     companion object {
         fun from(source: Source, bytes: ByteArray): Question {
-            val d = parseDomainName(source, bytes)
             return Question(
-                domainName = d,
+                domainName = parseDomainName(source, bytes),
                 type = Type.from(source.readShort()),
                 clazz = Class.from(source.readShort())
             )
@@ -171,8 +171,8 @@ data class Answer(
     val ttl: Int,
     val rdata: String,
 ) {
-    fun toByteArray(buffer: Buffer) {
-        buffer.writeDomainName(domainName)
+    fun toByteArray(buffer: Buffer, offset: Offset, mappings: MutableMap<String, Int>) {
+        buffer.writeDomainName(domainName, offset, mappings)
         buffer.writeShort(type.value)
         buffer.writeShort(clazz.value)
         buffer.writeInt(ttl)
@@ -194,11 +194,15 @@ data class Message(
     val questions: List<Question>,
     val answers: List<Answer>,
 ) {
+    data class Offset(var offset: Int = 12)
+
     fun toByteArray(): ByteArray {
         val buffer = Buffer()
         header.toByteArray(buffer)
-        questions.forEach { it.toByteArray(buffer) }
-        answers.forEach { it.toByteArray(buffer) }
+        val mappings = mutableMapOf<String, Int>()
+        val offset = Offset()
+        questions.forEach { it.toByteArray(buffer, offset, mappings) }
+        answers.forEach { it.toByteArray(buffer, offset, mappings) }
         return buffer.readByteArray()
     }
 
@@ -241,13 +245,25 @@ data class Message(
     }
 }
 
-private fun Buffer.writeDomainName(domainName: String) {
-    domainName
-        .split("\\W+".toRegex())
-        .filter { it.isNotEmpty() }
-        .forEach {
-            writeByte(it.length.toByte())
-            writeString(it)
+private fun Buffer.writeDomainName(domainName: String, offset: Offset, mappings: MutableMap<String, Int>) {
+    var left = 0
+    var domainName = domainName
+    while (left != -1 && left < domainName.length) {
+        val remaining = domainName.substring(left)
+        if (remaining in mappings) {
+            writeShort((mappings[remaining]!! or 0b1100000000000000).toShort())
+            offset.offset += 2
+            return
+        } else {
+            mappings[remaining] = offset.offset
+            var right = domainName.indexOf('.', left + 1)
+            right = if (right == -1) domainName.length else right
+            offset.offset += (right - left + 1)
+            val label = domainName.substring(left, right)
+            writeByte(label.length.toByte())
+            writeString(label)
+            left = right + 1
         }
+    }
     writeByte(0)
 }
