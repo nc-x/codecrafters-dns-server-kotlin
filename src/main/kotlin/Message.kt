@@ -1,7 +1,9 @@
+import io.ktor.utils.io.core.*
 import kotlinx.io.Buffer
 import kotlinx.io.Source
 import kotlinx.io.readByteArray
 import kotlinx.io.readString
+import kotlinx.io.readUByte
 import kotlinx.io.writeString
 
 typealias Bit3 = Byte
@@ -129,12 +131,36 @@ data class Question(
     }
 
     companion object {
-        fun from(source: Source) =
-            Question(
-                domainName = parseDomainName(source),
+        fun from(source: Source, bytes: ByteArray): Question {
+            val d = parseDomainName(source, bytes)
+            return Question(
+                domainName = d,
                 type = Type.from(source.readShort()),
                 clazz = Class.from(source.readShort())
             )
+        }
+
+        private fun parseDomainName(source: Source, bytes: ByteArray): String {
+            var source = source
+            var payloadLen: Int
+            val name = StringBuilder()
+            while (true) {
+                payloadLen = source.readUByte().toInt()
+                if (payloadLen == 0) break
+                else if (payloadLen and 0b11000000 == 0b11000000) {
+                    // Compressed
+                    payloadLen = (payloadLen shr 8) or source.readUByte().toInt()
+                    var reqdOffset = payloadLen and 0b0011111111111111
+                    source = Buffer().apply { write(bytes.sliceArray(reqdOffset..<bytes.size)) }
+                } else {
+                    // Uncompressed
+                    val label = source.readString(payloadLen.toLong())
+                    name.append(label)
+                    name.append(".")
+                }
+            }
+            return name.toString()
+        }
     }
 }
 
@@ -165,14 +191,14 @@ data class Answer(
 
 data class Message(
     val header: Header,
-    val question: Question,
-    val answer: Answer?,
+    val questions: List<Question>,
+    val answers: List<Answer>,
 ) {
     fun toByteArray(): ByteArray {
         val buffer = Buffer()
         header.toByteArray(buffer)
-        question.toByteArray(buffer)
-        answer?.toByteArray(buffer)
+        questions.forEach { it.toByteArray(buffer) }
+        answers.forEach { it.toByteArray(buffer) }
         return buffer.readByteArray()
     }
 
@@ -189,38 +215,30 @@ data class Message(
                     ra = false, // 0
                     z = 0,
                     rcode = if (incoming.header.opcode.toInt() == 0) 0 else 4,
-                    qdcount = 1,
-                    ancount = 1,
+                    qdcount = incoming.header.qdcount,
+                    ancount = incoming.questions.size.toShort(),
                     nscount = 0,
                     arcount = 0,
                 ),
-                question = incoming.question,
-                answer = Answer(
-                    domainName = incoming.question.domainName,
-                    type = incoming.question.type,
-                    clazz = incoming.question.clazz,
-                    ttl = 60,
-                    rdata = "8.8.8.8"
-                )
+                questions = incoming.questions,
+                answers = incoming.questions.map { question ->
+                    Answer(
+                        domainName = question.domainName,
+                        type = question.type,
+                        clazz = question.clazz,
+                        ttl = 60,
+                        rdata = "8.8.8.8"
+                    )
+                }
             )
 
         fun from(source: Source): Message {
+            val bytes = source.copy().readByteArray()
             val header = Header.from(source)
-            val question = Question.from(source)
-            return Message(header, question, null)
+            val questions = (0..<header.qdcount).map { Question.from(source, bytes) }
+            return Message(header, questions, listOf())
         }
     }
-}
-
-private fun parseDomainName(source: Source): String {
-    var payloadLen: Byte
-    val name = StringBuilder()
-    do {
-        payloadLen = source.readByte()
-        name.append(source.readString(payloadLen.toLong()))
-        name.append(".")
-    } while (payloadLen != 0.toByte())
-    return name.toString()
 }
 
 private fun Buffer.writeDomainName(domainName: String) {
