@@ -139,28 +139,6 @@ data class Question(
                 clazz = Class.from(source.readShort())
             )
         }
-
-        private fun parseDomainName(source: Source, bytes: ByteArray): String {
-            var source = source
-            var payloadLen: Int
-            val name = StringBuilder()
-            while (true) {
-                payloadLen = source.readUByte().toInt()
-                if (payloadLen == 0) break
-                else if (payloadLen and 0b11000000 == 0b11000000) {
-                    // Compressed
-                    payloadLen = (payloadLen shr 8) or source.readUByte().toInt()
-                    var reqdOffset = payloadLen and 0b0011111111111111
-                    source = Buffer().apply { write(bytes.sliceArray(reqdOffset..<bytes.size)) }
-                } else {
-                    // Uncompressed
-                    val label = source.readString(payloadLen.toLong())
-                    name.append(label)
-                    name.append(".")
-                }
-            }
-            return name.toString()
-        }
     }
 }
 
@@ -187,6 +165,31 @@ data class Answer(
         }
 
     }
+
+    companion object {
+        fun from(source: Source, bytes: ByteArray): Answer {
+            val domainName = parseDomainName(source, bytes)
+            val type = Type.from(source.readShort())
+            val clazz = Class.from(source.readShort())
+            val ttl = source.readInt()
+            val rdata = when (type) {
+                Type.A -> {
+                    val payloadLen = source.readShort()
+                    val payload = source.readByteArray(payloadLen.toInt())
+                    "${payload[0].toInt()}.${payload[1].toInt()}.${payload[2].toInt()}.${payload[3].toInt()}"
+                }
+
+                else -> error("RDATA is only implemented for A currently.")
+            }
+            return Answer(
+                domainName,
+                type,
+                clazz,
+                ttl,
+                rdata,
+            )
+        }
+    }
 }
 
 data class Message(
@@ -207,8 +210,17 @@ data class Message(
     }
 
     companion object {
-        fun responseFor(incoming: Message): Message =
-            Message(
+        fun responseFor(incoming: Message): Message {
+            val answers = incoming.questions.map { question ->
+                Answer(
+                    domainName = question.domainName,
+                    type = question.type,
+                    clazz = question.clazz,
+                    ttl = 60,
+                    rdata = "8.8.8.8"
+                )
+            }
+            return Message(
                 header = Header(
                     id = incoming.header.id,
                     qr = true, // 1
@@ -220,27 +232,21 @@ data class Message(
                     z = 0,
                     rcode = if (incoming.header.opcode.toInt() == 0) 0 else 4,
                     qdcount = incoming.header.qdcount,
-                    ancount = incoming.questions.size.toShort(),
+                    ancount = answers.size.toShort(),
                     nscount = 0,
                     arcount = 0,
                 ),
                 questions = incoming.questions,
-                answers = incoming.questions.map { question ->
-                    Answer(
-                        domainName = question.domainName,
-                        type = question.type,
-                        clazz = question.clazz,
-                        ttl = 60,
-                        rdata = "8.8.8.8"
-                    )
-                }
+                answers = answers,
             )
+        }
 
         fun from(source: Source): Message {
             val bytes = source.copy().readByteArray()
             val header = Header.from(source)
             val questions = (0..<header.qdcount).map { Question.from(source, bytes) }
-            return Message(header, questions, listOf())
+            val answers = (0..<header.ancount).map { Answer.from(source, bytes) }
+            return Message(header, questions, answers)
         }
     }
 }
@@ -266,4 +272,27 @@ private fun Buffer.writeDomainName(domainName: String, offset: Offset, mappings:
         }
     }
     writeByte(0)
+}
+
+
+private fun parseDomainName(source: Source, bytes: ByteArray): String {
+    var source = source
+    var payloadLen: Int
+    val name = StringBuilder()
+    while (true) {
+        payloadLen = source.readUByte().toInt()
+        if (payloadLen == 0) break
+        else if (payloadLen and 0b11000000 == 0b11000000) {
+            // Compressed
+            payloadLen = (payloadLen shr 8) or source.readUByte().toInt()
+            var reqdOffset = payloadLen and 0b0011111111111111
+            source = Buffer().apply { write(bytes.sliceArray(reqdOffset..<bytes.size)) }
+        } else {
+            // Uncompressed
+            val label = source.readString(payloadLen.toLong())
+            name.append(label)
+            name.append(".")
+        }
+    }
+    return name.toString()
 }
